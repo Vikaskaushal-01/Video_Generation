@@ -199,3 +199,70 @@ function labelFor(name, value) {
   return f?.options.find(([v]) => v === value)?.[1].replace(/^[^\w\d]+\s*/u, "") || value;
 }
 
+function render(v) {
+  let media;
+  if (v.status === "completed") {
+    media = `<video src="/api/videos/${v.id}/content#t=0.1" controls loop playsinline preload="metadata"></video>`;
+  } else if (v.status === "failed") {
+    media = `<div class="loading err">⚠ Generation failed<br>${esc(v.error || "")}</div>`;
+  } else {
+    const secs = Math.floor((Date.now() - v.createdAt) / 1000);
+    const est = Math.min(95, Math.round(secs / 1.8));
+    media = `<div class="loading"><div class="spinner"></div>Creating your video… ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}<div class="bar"><div style="width:${est}%"></div></div><div style="margin-top:8px">Usually takes 1–5 minutes. You can keep generating more.</div></div>`;
+  }
+  const opts = Object.entries(v.options || {}).map(([k, val]) => labelFor(k, val));
+  const tags = [...opts, v.fromImage && "from image", v.editOf && "edit"].filter(Boolean).join(" · ");
+  return `
+    <div class="media ${v.portrait ? "portrait" : ""}">${media}</div>
+    <div class="body">
+      <div class="prompt">${esc(v.prompt) || "<i>(image only)</i>"}</div>
+      <div class="meta">${esc(tags)} · ${new Date(v.createdAt).toLocaleString()}</div>
+      <div class="actions">
+        ${v.status === "completed" ? `<a href="/api/videos/${v.id}/content?download" download>⬇ Download</a>` : ""}
+        ${v.status === "completed" && v.canEdit ? `<button data-edit="${v.id}">✏️ Edit</button>` : ""}
+        ${v.prompt ? `<button data-copy="${esc(v.prompt)}">📋 Reuse prompt</button>` : ""}
+        ${v.status !== "processing" ? `<button class="del" data-del="${v.id}">🗑 Delete</button>` : ""}
+      </div>
+    </div>`;
+}
+
+function upsert(v, prepend = false) {
+  const prev = jobs.get(v.id);
+  if (prev && prev.status === "completed" && v.status === "completed") return; // keep video playing
+  jobs.set(v.id, v);
+  let el = document.querySelector(`[data-id="${v.id}"]`);
+  if (!el) {
+    el = document.createElement("div"); el.className = "card"; el.dataset.id = v.id;
+    prepend ? $("grid").prepend(el) : $("grid").append(el);
+  }
+  el.innerHTML = render(v);
+  $("hero").style.paddingTop = jobs.size ? "10px" : "40px";
+}
+
+$("grid").onclick = async (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  if (b.dataset.edit) setEdit(b.dataset.edit);
+  if (b.dataset.copy !== undefined) { $("prompt").value = b.dataset.copy; updateCount(); $("prompt").focus(); }
+  if (b.dataset.del) {
+    try { await api(`/api/videos/${b.dataset.del}`, { method: "DELETE" }); } catch (err) { toast(err.message); }
+    document.querySelector(`[data-id="${b.dataset.del}"]`)?.remove(); jobs.delete(b.dataset.del);
+  }
+};
+
+(async () => {
+  try {
+    config = await api("/api/config");
+    $("badge").textContent = config.label;
+    if (config.setupError) {
+      $("hero").insertAdjacentHTML("beforeend", `<p class="err" style="margin-top:16px;border:1px solid var(--danger);padding:12px;border-radius:10px">⚠ ${esc(config.setupError)}</p>`);
+    }
+    $("opts").innerHTML = config.fields.map((f) =>
+      `<select id="opt-${f.name}" title="${esc(f.label)}">${f.options.map(([v, l]) => `<option value="${esc(v)}" ${v === f.default ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>`
+    ).join("");
+    const { data = [] } = await api("/api/videos");
+    data.forEach((v) => { upsert(v); if (v.status === "processing") poll(v.id); });
+  } catch (e) { toast('The app server is not running. Open PowerShell in the project folder and run "npm start".'); }
+})();
+</script>
+</body>
+</html>
