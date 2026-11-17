@@ -64,3 +64,30 @@
   @media (max-width: 600px) { .go { width: 100%; margin-left: 0; } }
 </style>
 </head>
+<body>
+<header><div class="logo">▶</div><h1>AI Video Studio</h1><span class="badge" id="badge"></span></header>
+
+<main>
+  <section class="hero" id="hero">
+    <h2>What do you want to create?</h2>
+    <p>Describe a scene, or upload an image, and AI turns it into a video.</p>
+    <div class="ideas" id="ideas"></div>
+  </section>
+  <div class="grid" id="grid"></div>
+</main>
+
+<div class="composer">
+  <div class="box" id="box">
+    <div class="edit-tag">✏️ Editing a video — describe what to change (e.g. "make it night time") <button id="cancelEdit">✕ cancel</button></div>
+    <textarea id="prompt" placeholder="A golden retriever surfing a huge wave at sunset, cinematic slow motion…"></textarea>
+    <div class="row">
+      <span id="opts"></span>
+      <label class="attach" title="Start from an image">🖼 Image<input type="file" id="file" accept="image/png,image/jpeg" /></label>
+      <span class="thumb" id="thumb"><img id="thumbImg" alt="" /><button id="clearImg" title="Remove">✕</button></span>
+      <span class="count" id="count"></span>
+      <button class="go" id="go">Generate</button>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
