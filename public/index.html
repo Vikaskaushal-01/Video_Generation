@@ -121,3 +121,41 @@ $("file").onchange = (e) => {
 };
 $("clearImg").onclick = () => { imageData = null; $("file").value = ""; $("thumb").style.display = "none"; };
 
+// Keep uploads small (APIs limit image size to ~5 MB)
+function shrinkImage(dataUrl, max = 1280) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const s = Math.min(1, max / Math.max(img.width, img.height));
+      const c = document.createElement("canvas");
+      c.width = Math.round(img.width * s); c.height = Math.round(img.height * s);
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+      resolve(c.toDataURL("image/jpeg", 0.85));
+    };
+    img.src = dataUrl;
+  });
+}
+
+function setEdit(id) {
+  editId = id;
+  $("box").classList.toggle("editing", !!id);
+  $("go").textContent = id ? "Apply edit" : "Generate";
+  if (id) $("prompt").focus();
+}
+$("cancelEdit").onclick = () => setEdit(null);
+
+async function api(url, opts = {}) {
+  let r;
+  try { r = await fetch(url, { headers: { "Content-Type": "application/json" }, ...opts }); }
+  catch { throw new Error('Cannot reach the server — check your connection and try again.'); }
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error?.message || `Request failed (${r.status})`);
+  return data;
+}
+
+function currentOptions() {
+  const o = {};
+  config.fields.forEach((f) => (o[f.name] = $("opt-" + f.name).value));
+  return o;
+}
+
