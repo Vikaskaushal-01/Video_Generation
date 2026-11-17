@@ -208,7 +208,7 @@ function render(v) {
     media = `<div class="loading"><div class="spinner"></div>Creating your video… ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}<div class="bar"><div style="width:${est}%"></div></div><div style="margin-top:8px">Usually takes 30 seconds to a few minutes. Keep this tab open.</div></div>`;
   }
   const opts = Object.entries(v.options || {}).map(([k, val]) => labelFor(k, val));
-  const tags = [...opts, v.fromImage && "from image"].filter(Boolean).join(" · ");
+  const tags = [v.model, ...opts, v.fromImage && "from image"].filter(Boolean).join(" · ");
   return `
     <div class="media ${v.portrait ? "portrait" : ""}">${media}</div>
     <div class="body">

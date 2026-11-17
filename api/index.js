@@ -6,37 +6,13 @@
 //   POST /api/videos          -> generate; returns { status: "completed", videoUrl } or { status: "processing", taskId }
 //   GET  /api/videos/:taskId  -> check a processing task (zhipu)
 
+import * as hf from "../lib/hf.js";
+
 const PROVIDER_ID = (process.env.VIDEO_PROVIDER || "huggingface").toLowerCase();
 
 async function readJson(r) {
   const json = await r.json().catch(() => ({}));
   return Array.isArray(json) ? json[0] || {} : json;
-}
-
-// ---------- Hugging Face (free): FLUX draws the first frame, Wan 2.2 animates it ----------
-// Tries with your token first (your own daily GPU quota); if that fails, retries anonymously (shared free quota)
-async function gradio(host, api, data) {
-  try { return await gradioCall(host, api, data, { Authorization: `Bearer ${process.env.HF_TOKEN}` }); }
-  catch (err) {
-    console.warn(`HF call with token failed (${err.message}) — retrying without token`);
-    return gradioCall(host, api, data, {});
-  }
-}
-
-async function gradioCall(host, api, data, auth) {
-  const r = await fetch(`${host}/gradio_api/call/${api}`, { method: "POST", headers: { ...auth, "Content-Type": "application/json" }, body: JSON.stringify({ data }) });
-  const start = await readJson(r);
-  if (!r.ok || !start.event_id) throw new Error(start.error || start.detail || `Hugging Face Space unavailable (${r.status}) — it may be restarting, try again in a minute`);
-  const text = await (await fetch(`${host}/gradio_api/call/${api}/${start.event_id}`, { headers: auth })).text();
-  const last = [...text.matchAll(/event: (\w+)\ndata: (.*)/g)].pop();
-  if (!last) throw new Error("No response from Hugging Face Space");
-  const payload = (() => { try { return JSON.parse(last[2]); } catch { return last[2]; } })();
-  if (last[1] !== "complete") {
-    const msg = payload?.message || payload?.error || (typeof payload === "string" && payload !== "null" ? payload : "");
-    if (/quota|GPU/i.test(msg)) throw new Error(`Free daily GPU limit reached on Hugging Face — try again later (it resets every day). ${msg}`);
-    throw new Error(msg || "The Hugging Face Space failed to generate (it may be busy or restarting) — try again in a minute");
-  }
-  return payload;
 }
 
 const ZHIPU_ERRORS = {
@@ -61,7 +37,7 @@ async function zhipu(method, path, body) {
 
 const PROVIDERS = {
   huggingface: {
-    label: "Wan 2.2 on Hugging Face · free",
+    label: "Hugging Face · free · auto-switching models",
     keyName: "HF_TOKEN",
     keyUrl: "https://huggingface.co/settings/tokens",
     promptLimit: 1000,
@@ -71,20 +47,8 @@ const PROVIDERS = {
     ],
     portrait: (o) => o.shape === "portrait",
     async start({ prompt, image, options }) {
-      const [w, h] = { landscape: [832, 480], portrait: [480, 832], square: [640, 640] }[options.shape];
-      const imageHost = process.env.HF_IMAGE_SPACE || "https://black-forest-labs-flux-1-schnell.hf.space";
-      const videoHost = process.env.HF_VIDEO_SPACE || "https://prithivmlmods-wan2-2-fast.hf.space";
-      if (!image) {
-        const [img] = await gradio(imageHost, "infer", [prompt, 0, true, w, h, 4]);
-        const r = await fetch(img.url);
-        if (!r.ok) throw new Error("Could not download the first frame image");
-        image = `data:${r.headers.get("content-type") || "image/webp"};base64,${Buffer.from(await r.arrayBuffer()).toString("base64")}`;
-      }
-      const [vid] = await gradio(videoHost, "generate_video",
-        [image, prompt || "cinematic motion, smooth animation", 4, "blurry, low quality, deformed, watermark, static", Number(options.seconds), 1, 1, 42, true]);
-      const videoUrl = vid?.video?.url || vid?.url || (typeof vid?.video === "string" ? vid.video : null);
-      if (!videoUrl) throw new Error("The Space returned no video");
-      return { status: "completed", videoUrl };
+      const { videoUrl, model } = await hf.generate({ prompt, image, shape: options.shape, seconds: options.seconds });
+      return { status: "completed", videoUrl, model };
     },
   },
 

@@ -17,3 +17,4 @@ Videos are hosted by the AI service, which deletes them after a while — use **
 
 - `public/index.html` – the website
 - `api/index.js` – the API (one Vercel function)
+- `lib/hf.js` – Hugging Face models; tries them in order and switches automatically when one fails or hits its limit (set `HF_MODELS` to change the order)
