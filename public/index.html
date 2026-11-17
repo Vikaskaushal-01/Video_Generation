@@ -91,3 +91,33 @@
 </div>
 <div class="toast" id="toast"></div>
 
+<script>
+const $ = (id) => document.getElementById(id);
+const IDEAS = [
+  "A cozy cabin in a snowy forest, smoke rising from the chimney, camera slowly pushes in",
+  "Neon-lit Tokyo street at night in the rain, reflections on wet pavement",
+  "An astronaut riding a horse across Mars, epic wide shot",
+  "Macro shot of a hummingbird drinking from a flower, slow motion",
+  "A paper boat sailing down a stream in a magical glowing forest",
+];
+let config = { fields: [], promptLimit: 512 }, imageData = null, editId = null;
+const jobs = new Map();
+
+function toast(msg) { const t = $("toast"); t.textContent = msg; t.style.display = "block"; clearTimeout(t._h); t._h = setTimeout(() => t.style.display = "none", 6000); }
+function esc(s) { return String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+
+$("ideas").innerHTML = IDEAS.map((i) => `<button>${esc(i)}</button>`).join("");
+$("ideas").onclick = (e) => { if (e.target.tagName === "BUTTON") { $("prompt").value = e.target.textContent; updateCount(); $("prompt").focus(); } };
+
+function updateCount() { const n = $("prompt").value.length; $("count").textContent = n > config.promptLimit * 0.7 ? `${n}/${config.promptLimit}` : ""; }
+$("prompt").addEventListener("input", (e) => { e.target.style.height = "auto"; e.target.style.height = e.target.scrollHeight + "px"; updateCount(); });
+$("prompt").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); generate(); } });
+
+$("file").onchange = (e) => {
+  const f = e.target.files[0]; if (!f) return;
+  const r = new FileReader();
+  r.onload = () => { imageData = r.result; $("thumbImg").src = imageData; $("thumb").style.display = "inline-flex"; };
+  r.readAsDataURL(f);
+};
+$("clearImg").onclick = () => { imageData = null; $("file").value = ""; $("thumb").style.display = "none"; };
+
