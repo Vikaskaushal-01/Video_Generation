@@ -4,3 +4,5 @@ node_modules/
 videos/
 .vercel/
 t.py
+
+.vercel
