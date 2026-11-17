@@ -32,3 +32,27 @@ async function runJob(job, input) {
   await store.saveJob(job);
 }
 
+// Moves a processing job forward on each status poll (zhipu), or fails jobs whose function was cut off
+async function advance(job) {
+  if (job.status !== "processing" || job.provider !== PROVIDER_ID) return job;
+  if (!job.taskId) {
+    if (Date.now() - job.createdAt > (MAX_DURATION + 30) * 1000) {
+      Object.assign(job, { status: "failed", error: "Generation took longer than the server time limit — try a shorter or smaller video." });
+      await store.saveJob(job);
+    }
+    return job;
+  }
+  if (Date.now() - (job.checkedAt || 0) < 4000 || !(await store.lock(job.id))) return job;
+  try {
+    const result = await provider.check(job);
+    if (result) await finish(job, result);
+    else job.checkedAt = Date.now();
+  } catch (err) {
+    console.error(`Job ${job.id} failed:`, err);
+    Object.assign(job, { status: "failed", error: err.message });
+  }
+  await store.saveJob(job);
+  await store.unlock(job.id);
+  return job;
+}
+
