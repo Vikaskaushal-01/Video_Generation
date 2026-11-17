@@ -45,9 +45,6 @@
   .composer { position: fixed; left: 0; right: 0; bottom: 0; padding: 12px 16px 18px; background: linear-gradient(transparent, var(--bg) 30%); }
   .box { max-width: 860px; margin: 0 auto; background: var(--panel); border: 1px solid var(--line); border-radius: 18px; padding: 12px; box-shadow: 0 10px 40px #0008; }
   .box.editing { border-color: var(--accent2); }
-  .edit-tag { display: none; font-size: 12px; color: var(--accent2); margin-bottom: 6px; }
-  .edit-tag button { background: none; border: none; color: var(--muted); cursor: pointer; }
-  .box.editing .edit-tag { display: block; }
   .box.editing #opts, .box.editing .attach { display: none; }
   textarea { width: 100%; resize: none; border: none; outline: none; background: transparent; color: var(--text); font: inherit; font-size: 15px; min-height: 48px; max-height: 160px; }
   .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -78,7 +75,6 @@
 
 <div class="composer">
   <div class="box" id="box">
-    <div class="edit-tag">✏️ Editing a video — describe what to change (e.g. "make it night time") <button id="cancelEdit">✕ cancel</button></div>
     <textarea id="prompt" placeholder="A golden retriever surfing a huge wave at sunset, cinematic slow motion…"></textarea>
     <div class="row">
       <span id="opts"></span>
@@ -100,7 +96,7 @@ const IDEAS = [
   "Macro shot of a hummingbird drinking from a flower, slow motion",
   "A paper boat sailing down a stream in a magical glowing forest",
 ];
-let config = { fields: [], promptLimit: 512 }, imageData = null, editId = null;
+let config = { fields: [], promptLimit: 512 }, imageData = null;
 const jobs = new Map();
 
 function toast(msg) { const t = $("toast"); t.textContent = msg; t.style.display = "block"; clearTimeout(t._h); t._h = setTimeout(() => t.style.display = "none", 6000); }
@@ -121,7 +117,7 @@ $("file").onchange = (e) => {
 };
 $("clearImg").onclick = () => { imageData = null; $("file").value = ""; $("thumb").style.display = "none"; };
 
-// Keep uploads small (APIs limit image size to ~5 MB)
+// Keep uploads small (Vercel limits requests to ~4.5 MB)
 function shrinkImage(dataUrl, max = 1280) {
   return new Promise((resolve) => {
     const img = new Image();
@@ -136,21 +132,22 @@ function shrinkImage(dataUrl, max = 1280) {
   });
 }
 
-function setEdit(id) {
-  editId = id;
-  $("box").classList.toggle("editing", !!id);
-  $("go").textContent = id ? "Apply edit" : "Generate";
-  if (id) $("prompt").focus();
-}
-$("cancelEdit").onclick = () => setEdit(null);
-
 async function api(url, opts = {}) {
   let r;
   try { r = await fetch(url, { headers: { "Content-Type": "application/json" }, ...opts }); }
-  catch { throw new Error('Cannot reach the server — check your connection and try again.'); }
+  catch { throw new Error("Cannot reach the server — check your connection and try again."); }
   const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(data.error?.message || `Request failed (${r.status})`);
+  if (!r.ok) throw new Error(data.error?.message || (r.status === 504 ? "The AI took too long — try a shorter video or try again." : `Request failed (${r.status})`));
   return data;
+}
+
+// History lives in this browser only (no database)
+const STORE = "videos";
+function saveHistory() {
+  try { localStorage.setItem(STORE, JSON.stringify([...jobs.values()].filter((j) => j.status !== "failed").slice(0, 50))); } catch {}
+}
+function loadHistory() {
+  try { return JSON.parse(localStorage.getItem(STORE) || "[]"); } catch { return []; }
 }
 
 function currentOptions() {
@@ -163,34 +160,29 @@ async function generate() {
   const prompt = $("prompt").value.trim();
   if (!prompt && !imageData) return toast("Please describe the video you want.");
   if (prompt.length > config.promptLimit) return toast(`Prompt is too long (max ${config.promptLimit} characters).`);
-  $("go").disabled = true;
+  const body = { prompt, options: currentOptions() };
+  if (imageData) body.image = await shrinkImage(imageData);
+  const job = { id: crypto.randomUUID().slice(0, 12), prompt, options: body.options, fromImage: !!imageData, status: "processing", createdAt: Date.now() };
+  upsert(job, true);
+  $("prompt").value = ""; $("prompt").style.height = "auto"; updateCount(); $("clearImg").click();
   try {
-    const body = { prompt, options: currentOptions() };
-    let video;
-    if (editId) {
-      video = await api(`/api/videos/${editId}/edit`, { method: "POST", body: JSON.stringify(body) });
-      setEdit(null);
-    } else {
-      if (imageData) body.image = await shrinkImage(imageData);
-      video = await api("/api/videos", { method: "POST", body: JSON.stringify(body) });
-      $("clearImg").click();
-    }
-    $("prompt").value = ""; $("prompt").style.height = "auto"; updateCount();
-    upsert(video, true);
-    poll(video.id);
-  } catch (e) { toast(e.message); }
-  finally { $("go").disabled = false; }
+    const r = await api("/api/videos", { method: "POST", body: JSON.stringify(body) });
+    finish(job, r);
+  } catch (e) { finish(job, { status: "failed", error: e.message }); }
 }
 $("go").onclick = generate;
 
-async function poll(id) {
-  while (true) {
-    await new Promise((r) => setTimeout(r, 3000));
-    try {
-      const v = await api(`/api/videos/${id}`);
-      upsert(v);
-      if (v.status !== "processing") return;
-    } catch (e) { console.warn(e); }
+function finish(job, r) {
+  Object.assign(job, r, r.status === "completed" && { finishedAt: Date.now() });
+  upsert(job); saveHistory();
+  if (job.status === "processing" && job.taskId) poll(job);
+}
+
+async function poll(job) {
+  while (job.status === "processing") {
+    await new Promise((r) => setTimeout(r, 5000));
+    try { finish(job, await api(`/api/videos/${encodeURIComponent(job.taskId)}`)); }
+    catch (e) { if (!/reach the server/.test(e.message)) finish(job, { status: "failed", error: e.message }); }
   }
 }
 
@@ -202,51 +194,48 @@ function labelFor(name, value) {
 function render(v) {
   let media;
   if (v.status === "completed") {
-    media = `<video src="/api/videos/${v.id}/content#t=0.1" controls loop playsinline preload="metadata"></video>`;
+    media = `<video src="${esc(v.videoUrl)}#t=0.1" controls loop playsinline preload="metadata" onerror="this.outerHTML='<div class=&quot;loading err&quot;>This video has expired on the AI service.<br>Use “Reuse prompt” to make it again.</div>'"></video>`;
   } else if (v.status === "failed") {
     media = `<div class="loading err">⚠ Generation failed<br>${esc(v.error || "")}</div>`;
   } else {
     const secs = Math.floor((Date.now() - v.createdAt) / 1000);
     const est = Math.min(95, Math.round(secs / 1.8));
-    media = `<div class="loading"><div class="spinner"></div>Creating your video… ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}<div class="bar"><div style="width:${est}%"></div></div><div style="margin-top:8px">Usually takes 1–5 minutes. You can keep generating more.</div></div>`;
+    media = `<div class="loading"><div class="spinner"></div>Creating your video… ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}<div class="bar"><div style="width:${est}%"></div></div><div style="margin-top:8px">Usually takes 30 seconds to a few minutes. Keep this tab open.</div></div>`;
   }
   const opts = Object.entries(v.options || {}).map(([k, val]) => labelFor(k, val));
-  const tags = [...opts, v.fromImage && "from image", v.editOf && "edit"].filter(Boolean).join(" · ");
+  const tags = [...opts, v.fromImage && "from image"].filter(Boolean).join(" · ");
   return `
     <div class="media ${v.portrait ? "portrait" : ""}">${media}</div>
     <div class="body">
       <div class="prompt">${esc(v.prompt) || "<i>(image only)</i>"}</div>
       <div class="meta">${esc(tags)} · ${new Date(v.createdAt).toLocaleString()}</div>
       <div class="actions">
-        ${v.status === "completed" ? `<a href="/api/videos/${v.id}/content?download" download>⬇ Download</a>` : ""}
-        ${v.status === "completed" && v.canEdit ? `<button data-edit="${v.id}">✏️ Edit</button>` : ""}
+        ${v.status === "completed" ? `<a href="${esc(v.videoUrl)}" target="_blank" rel="noopener" download="video-${v.id}.mp4">⬇ Download</a>` : ""}
         ${v.prompt ? `<button data-copy="${esc(v.prompt)}">📋 Reuse prompt</button>` : ""}
-        ${v.status !== "processing" ? `<button class="del" data-del="${v.id}">🗑 Delete</button>` : ""}
+        ${v.status !== "processing" ? `<button class="del" data-del="${v.id}">🗑 Remove</button>` : ""}
       </div>
     </div>`;
 }
 
 function upsert(v, prepend = false) {
-  const prev = jobs.get(v.id);
-  if (prev && prev.status === "completed" && v.status === "completed") return; // keep video playing
-  jobs.set(v.id, v);
   let el = document.querySelector(`[data-id="${v.id}"]`);
+  if (el && el.dataset.status === "completed" && v.status === "completed") return; // keep video playing
+  jobs.set(v.id, v);
   if (!el) {
     el = document.createElement("div"); el.className = "card"; el.dataset.id = v.id;
     prepend ? $("grid").prepend(el) : $("grid").append(el);
   }
+  el.dataset.status = v.status;
   el.innerHTML = render(v);
   $("hero").style.paddingTop = jobs.size ? "10px" : "40px";
 }
+// Refresh the timer on cards that are still generating
+setInterval(() => jobs.forEach((j) => { if (j.status === "processing") upsert(j); }), 1000);
 
-$("grid").onclick = async (e) => {
+$("grid").onclick = (e) => {
   const b = e.target.closest("button"); if (!b) return;
-  if (b.dataset.edit) setEdit(b.dataset.edit);
   if (b.dataset.copy !== undefined) { $("prompt").value = b.dataset.copy; updateCount(); $("prompt").focus(); }
-  if (b.dataset.del) {
-    try { await api(`/api/videos/${b.dataset.del}`, { method: "DELETE" }); } catch (err) { toast(err.message); }
-    document.querySelector(`[data-id="${b.dataset.del}"]`)?.remove(); jobs.delete(b.dataset.del);
-  }
+  if (b.dataset.del) { document.querySelector(`[data-id="${b.dataset.del}"]`)?.remove(); jobs.delete(b.dataset.del); saveHistory(); }
 };
 
 (async () => {
@@ -259,9 +248,13 @@ $("grid").onclick = async (e) => {
     $("opts").innerHTML = config.fields.map((f) =>
       `<select id="opt-${f.name}" title="${esc(f.label)}">${f.options.map(([v, l]) => `<option value="${esc(v)}" ${v === f.default ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>`
     ).join("");
-    const { data = [] } = await api("/api/videos");
-    data.forEach((v) => { upsert(v); if (v.status === "processing") poll(v.id); });
-  } catch (e) { toast('The app server is not running. Open PowerShell in the project folder and run "npm start".'); }
+  } catch (e) { toast(e.message); }
+  // Restore history; HF jobs interrupted by closing the tab can't be resumed
+  loadHistory().reverse().forEach((v) => {
+    if (v.status === "processing" && !v.taskId) Object.assign(v, { status: "failed", error: "The tab was closed before the video finished." });
+    upsert(v, true);
+    if (v.status === "processing") poll(v);
+  });
 })();
 </script>
 </body>

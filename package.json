@@ -5,7 +5,6 @@
   "type": "module",
   "engines": { "node": "24.x" },
   "scripts": {
-    "start": "node --env-file=.env server.js",
-    "start:public": "node --env-file=.env start-public.js"
+    "dev": "vercel dev"
   }
 }
