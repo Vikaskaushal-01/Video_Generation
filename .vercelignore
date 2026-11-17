@@ -1,0 +1,6 @@
+.env
+.env*.local
+videos/
+t.py
+server.js
+node_modules/
