@@ -14,8 +14,16 @@ async function readJson(r) {
 }
 
 // ---------- Hugging Face (free): FLUX draws the first frame, Wan 2.2 animates it ----------
+// Tries with your token first (your own daily GPU quota); if that fails, retries anonymously (shared free quota)
 async function gradio(host, api, data) {
-  const auth = { Authorization: `Bearer ${process.env.HF_TOKEN}` };
+  try { return await gradioCall(host, api, data, { Authorization: `Bearer ${process.env.HF_TOKEN}` }); }
+  catch (err) {
+    console.warn(`HF call with token failed (${err.message}) — retrying without token`);
+    return gradioCall(host, api, data, {});
+  }
+}
+
+async function gradioCall(host, api, data, auth) {
   const r = await fetch(`${host}/gradio_api/call/${api}`, { method: "POST", headers: { ...auth, "Content-Type": "application/json" }, body: JSON.stringify({ data }) });
   const start = await readJson(r);
   if (!r.ok || !start.event_id) throw new Error(start.error || start.detail || `Hugging Face Space unavailable (${r.status}) — it may be restarting, try again in a minute`);

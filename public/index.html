@@ -144,7 +144,12 @@ async function api(url, opts = {}) {
 // History lives in this browser only (no database)
 const STORE = "videos";
 function saveHistory() {
-  try { localStorage.setItem(STORE, JSON.stringify([...jobs.values()].filter((j) => j.status !== "failed").slice(0, 50))); } catch {}
+  // Browser storage is ~5 MB; drop the oldest videos until the list fits
+  let list = [...jobs.values()].filter((j) => j.status !== "failed").slice(0, 50);
+  while (list.length) {
+    try { localStorage.setItem(STORE, JSON.stringify(list)); return; } catch { list = list.slice(0, -1); }
+  }
+  try { localStorage.removeItem(STORE); } catch {}
 }
 function loadHistory() {
   try { return JSON.parse(localStorage.getItem(STORE) || "[]"); } catch { return []; }
