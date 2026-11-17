@@ -159,3 +159,43 @@ function currentOptions() {
   return o;
 }
 
+async function generate() {
+  const prompt = $("prompt").value.trim();
+  if (!prompt && !imageData) return toast("Please describe the video you want.");
+  if (prompt.length > config.promptLimit) return toast(`Prompt is too long (max ${config.promptLimit} characters).`);
+  $("go").disabled = true;
+  try {
+    const body = { prompt, options: currentOptions() };
+    let video;
+    if (editId) {
+      video = await api(`/api/videos/${editId}/edit`, { method: "POST", body: JSON.stringify(body) });
+      setEdit(null);
+    } else {
+      if (imageData) body.image = await shrinkImage(imageData);
+      video = await api("/api/videos", { method: "POST", body: JSON.stringify(body) });
+      $("clearImg").click();
+    }
+    $("prompt").value = ""; $("prompt").style.height = "auto"; updateCount();
+    upsert(video, true);
+    poll(video.id);
+  } catch (e) { toast(e.message); }
+  finally { $("go").disabled = false; }
+}
+$("go").onclick = generate;
+
+async function poll(id) {
+  while (true) {
+    await new Promise((r) => setTimeout(r, 3000));
+    try {
+      const v = await api(`/api/videos/${id}`);
+      upsert(v);
+      if (v.status !== "processing") return;
+    } catch (e) { console.warn(e); }
+  }
+}
+
+function labelFor(name, value) {
+  const f = config.fields.find((f) => f.name === name);
+  return f?.options.find(([v]) => v === value)?.[1].replace(/^[^\w\d]+\s*/u, "") || value;
+}
+
