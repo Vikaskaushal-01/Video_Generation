@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AI Video Studio</title>
+<style>
+  :root {
+    --bg: #0b0b10; --panel: #15151d; --panel2: #1d1d28; --line: #2a2a38;
+    --text: #ececf3; --muted: #8b8ba0; --accent: #7c5cff; --accent2: #22d3ee; --danger: #ff5c7a;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: var(--bg); color: var(--text); }
+  header { display: flex; align-items: center; gap: 10px; padding: 16px 24px; border-bottom: 1px solid var(--line); }
+  .logo { width: 30px; height: 30px; border-radius: 8px; background: linear-gradient(135deg, var(--accent), var(--accent2)); display: grid; place-items: center; font-weight: 800; }
+  header h1 { font-size: 18px; margin: 0; }
+  .badge { margin-left: auto; font-size: 12px; color: var(--muted); border: 1px solid var(--line); padding: 4px 10px; border-radius: 999px; }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 220px; }
+  .hero { text-align: center; padding: 40px 0 20px; }
+  .hero h2 { font-size: clamp(26px, 5vw, 40px); margin: 0 0 8px; }
+  .hero p { color: var(--muted); margin: 0; }
+  .ideas { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 18px; }
+  .ideas button { background: var(--panel); border: 1px solid var(--line); color: var(--muted); padding: 8px 12px; border-radius: 999px; cursor: pointer; font-size: 13px; }
+  .ideas button:hover { color: var(--text); border-color: var(--accent); }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; margin-top: 24px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; display: flex; flex-direction: column; }
+  .media { aspect-ratio: 16/9; background: #000; position: relative; display: grid; place-items: center; }
+  .media.portrait { aspect-ratio: 9/16; max-height: 520px; }
+  .media video { width: 100%; height: 100%; object-fit: contain; }
+  .loading { text-align: center; color: var(--muted); font-size: 13px; width: 80%; }
+  .bar { height: 6px; background: var(--panel2); border-radius: 99px; overflow: hidden; margin-top: 10px; }
+  .bar > div { height: 100%; width: 0; background: linear-gradient(90deg, var(--accent), var(--accent2)); transition: width .6s; }
+  .spinner { width: 34px; height: 34px; border: 3px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto 10px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .body { padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+  .prompt { font-size: 14px; line-height: 1.4; }
+  .meta { color: var(--muted); font-size: 12px; }
+  .err { color: var(--danger); font-size: 13px; }
+  .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  .actions button, .actions a { background: var(--panel2); border: 1px solid var(--line); color: var(--text); padding: 6px 10px; border-radius: 8px; font-size: 12px; cursor: pointer; text-decoration: none; }
+  .actions button:hover, .actions a:hover { border-color: var(--accent); }
+  .actions .del:hover { border-color: var(--danger); color: var(--danger); }
+
+  .composer { position: fixed; left: 0; right: 0; bottom: 0; padding: 12px 16px 18px; background: linear-gradient(transparent, var(--bg) 30%); }
+  .box { max-width: 860px; margin: 0 auto; background: var(--panel); border: 1px solid var(--line); border-radius: 18px; padding: 12px; box-shadow: 0 10px 40px #0008; }
+  .box.editing { border-color: var(--accent2); }
+  .edit-tag { display: none; font-size: 12px; color: var(--accent2); margin-bottom: 6px; }
+  .edit-tag button { background: none; border: none; color: var(--muted); cursor: pointer; }
+  .box.editing .edit-tag { display: block; }
+  .box.editing #opts, .box.editing .attach { display: none; }
+  textarea { width: 100%; resize: none; border: none; outline: none; background: transparent; color: var(--text); font: inherit; font-size: 15px; min-height: 48px; max-height: 160px; }
+  .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  #opts { display: contents; }
+  select, .attach { background: var(--panel2); color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 7px 10px; font-size: 13px; cursor: pointer; }
+  .attach input { display: none; }
+  .thumb { display: none; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+  .thumb img { width: 36px; height: 36px; object-fit: cover; border-radius: 6px; }
+  .thumb button { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 16px; }
+  .count { font-size: 11px; color: var(--muted); }
+  .go { margin-left: auto; background: linear-gradient(135deg, var(--accent), #5b8cff); color: #fff; border: none; border-radius: 12px; padding: 10px 18px; font-weight: 600; cursor: pointer; font-size: 14px; }
+  .go:disabled { opacity: .5; cursor: not-allowed; }
+  .toast { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); background: var(--danger); color: #fff; padding: 10px 16px; border-radius: 10px; display: none; z-index: 10; max-width: 90vw; font-size: 14px; }
+  @media (max-width: 600px) { .go { width: 100%; margin-left: 0; } }
+</style>
+</head>
