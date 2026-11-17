@@ -236,3 +236,131 @@ async function runJob(job, input) {
   save();
 }
 
+// ---------- HTTP server ----------
+function send(res, status, data) {
+  res.writeHead(status, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(data));
+}
+
+async function readJson(req, limit = 25 * 1024 * 1024) {
+  let size = 0;
+  const chunks = [];
+  for await (const c of req) {
+    if ((size += c.length) > limit) throw new Error("Upload too large");
+    chunks.push(c);
+  }
+  return chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : {};
+}
+
+const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".png": "image/png" };
+
+function serveStatic(req, res, pathname) {
+  const file = path.join(PUBLIC_DIR, pathname === "/" ? "index.html" : pathname);
+  if (!file.startsWith(PUBLIC_DIR) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
+    res.writeHead(404); return res.end("Not found");
+  }
+  res.writeHead(200, { "Content-Type": MIME[path.extname(file)] || "application/octet-stream" });
+  fs.createReadStream(file).pipe(res);
+}
+
+function streamVideo(req, res, file, download) {
+  const stat = fs.statSync(file);
+  const headers = { "Content-Type": "video/mp4", "Accept-Ranges": "bytes" };
+  if (download) headers["Content-Disposition"] = `attachment; filename="${path.basename(file)}"`;
+  const range = req.headers.range?.match(/bytes=(\d*)-(\d*)/);
+  if (range) {
+    const start = Number(range[1] || 0), end = range[2] ? Number(range[2]) : stat.size - 1;
+    res.writeHead(206, { ...headers, "Content-Range": `bytes ${start}-${end}/${stat.size}`, "Content-Length": end - start + 1 });
+    return fs.createReadStream(file, { start, end }).pipe(res);
+  }
+  res.writeHead(200, { ...headers, "Content-Length": stat.size });
+  fs.createReadStream(file).pipe(res);
+}
+
+const server = http.createServer(async (req, res) => {
+  const url = new URL(req.url, "http://x");
+  const parts = url.pathname.split("/").filter(Boolean); // ["api","videos",id,action]
+  try {
+    if (parts[0] !== "api") return serveStatic(req, res, decodeURIComponent(url.pathname));
+
+    // GET /api/config -> which options the UI should show
+    if (parts[1] === "config") {
+      const { label, fields, canEdit, promptLimit } = provider;
+      return send(res, 200, { provider: PROVIDER_ID, label, fields, canEdit, promptLimit, setupError: MISSING_KEY });
+    }
+    if (MISSING_KEY && req.method === "POST") return send(res, 400, { error: { message: MISSING_KEY } });
+    if (parts[1] !== "videos") return send(res, 404, { error: { message: "Not found" } });
+
+    // GET /api/videos -> history
+    if (req.method === "GET" && parts.length === 2) return send(res, 200, { data: jobs.map(publicJob) });
+
+    // POST /api/videos -> new video   |   POST /api/videos/:id/edit -> edit an existing one
+    if (req.method === "POST" && (parts.length === 2 || parts[3] === "edit")) {
+      const body = await readJson(req);
+      const prompt = String(body.prompt || "").trim();
+      if (!prompt && !body.image) return send(res, 400, { error: { message: "Please write a prompt." } });
+      if (prompt.length > provider.promptLimit) return send(res, 400, { error: { message: `Prompt is too long (max ${provider.promptLimit} characters).` } });
+
+      let parent = null;
+      if (parts[3] === "edit") {
+        parent = jobs.find((j) => j.id === parts[2]);
+        if (!provider.canEdit || !parent?.interactionId) return send(res, 400, { error: { message: "This video can't be edited." } });
+      }
+
+      const options = {};
+      for (const f of provider.fields) {
+        const v = String(parent ? parent.options[f.name] : body.options?.[f.name] ?? f.default);
+        if (!f.options.some(([val]) => val === v)) return send(res, 400, { error: { message: `Invalid ${f.label}.` } });
+        options[f.name] = v;
+      }
+      if (parent && body.options?.seconds) options.seconds = String(body.options.seconds);
+
+      let image = null;
+      if (body.image && !parent) {
+        if (!/^data:image\/(png|jpe?g|webp);base64,/.test(body.image)) return send(res, 400, { error: { message: "Unsupported image (use PNG or JPG)." } });
+        image = body.image;
+      }
+
+      const job = {
+        id: crypto.randomUUID().slice(0, 12),
+        provider: PROVIDER_ID,
+        prompt,
+        options,
+        portrait: provider.portrait(options),
+        fromImage: !!image,
+        editOf: parent?.id || null,
+        status: "processing",
+        createdAt: Date.now(),
+      };
+      jobs.unshift(job);
+      save();
+      runJob(job, { prompt, image, previousInteractionId: parent?.interactionId }); // runs in background
+      return send(res, 202, publicJob(job));
+    }
+
+    const job = jobs.find((j) => j.id === parts[2]);
+    if (!job) return send(res, 404, { error: { message: "Video not found" } });
+
+    if (req.method === "GET" && parts.length === 3) return send(res, 200, publicJob(job));
+
+    if (req.method === "GET" && parts[3] === "content") {
+      const file = path.join(VIDEO_DIR, `${job.id}.mp4`);
+      if (!fs.existsSync(file)) return send(res, 404, { error: { message: "Video file missing" } });
+      return streamVideo(req, res, file, url.searchParams.has("download"));
+    }
+
+    if (req.method === "DELETE" && parts.length === 3) {
+      fs.rmSync(path.join(VIDEO_DIR, `${job.id}.mp4`), { force: true });
+      jobs = jobs.filter((j) => j !== job);
+      save();
+      return send(res, 200, { deleted: true });
+    }
+
+    send(res, 404, { error: { message: "Not found" } });
+  } catch (err) {
+    console.error(err);
+    send(res, 500, { error: { message: err.message || "Server error" } });
+  }
+});
+
+server.listen(PORT, () => console.log(`\n  AI Video Studio (${provider.label}) running →  http://localhost:${PORT}\n`));
