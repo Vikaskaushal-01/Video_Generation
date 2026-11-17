@@ -56,3 +56,106 @@ async function advance(job) {
   return job;
 }
 
+function route(request) {
+  const url = new URL(request.url);
+  const r = url.searchParams.get("route") ?? url.pathname.replace(/^\/api\/?/, "");
+  return { url, parts: ["api", ...r.split("/").filter(Boolean)] };
+}
+
+async function handle(request) {
+  const { url, parts } = route(request);
+  const method = request.method;
+  try {
+    const SETUP = setupError();
+
+    // GET /api/config -> which options the UI should show
+    if (parts[1] === "config") {
+      if (!provider) return json(200, { provider: PROVIDER_ID, label: "Setup needed", fields: [], canEdit: false, promptLimit: 0, setupError: SETUP });
+      const { label, fields, canEdit, promptLimit } = provider;
+      return json(200, { provider: PROVIDER_ID, label, fields, canEdit, promptLimit, setupError: SETUP });
+    }
+    if (SETUP) return fail(method === "GET" ? 503 : 400, SETUP);
+    if (parts[1] !== "videos") return fail(404, "Not found");
+
+    // GET /api/videos -> history
+    if (method === "GET" && parts.length === 2) {
+      const jobs = await store.listJobs();
+      return json(200, { data: jobs.map(publicJob) });
+    }
+
+    // POST /api/videos -> new video   |   POST /api/videos/:id/edit -> edit an existing one
+    if (method === "POST" && (parts.length === 2 || parts[3] === "edit")) {
+      let body;
+      try { body = await request.json(); } catch { return fail(400, "Invalid request (the image may be too large — max ~4 MB)."); }
+      const prompt = String(body.prompt || "").trim();
+      if (!prompt && !body.image) return fail(400, "Please write a prompt.");
+      if (prompt.length > provider.promptLimit) return fail(400, `Prompt is too long (max ${provider.promptLimit} characters).`);
+
+      let parent = null;
+      if (parts[3] === "edit") {
+        parent = await store.getJob(parts[2]);
+        if (!provider.canEdit || !parent?.interactionId) return fail(400, "This video can't be edited.");
+      }
+
+      const options = {};
+      for (const f of provider.fields) {
+        const v = String(parent ? parent.options[f.name] : body.options?.[f.name] ?? f.default);
+        if (!f.options.some(([val]) => val === v)) return fail(400, `Invalid ${f.label}.`);
+        options[f.name] = v;
+      }
+      if (parent && body.options?.seconds) options.seconds = String(body.options.seconds);
+
+      let image = null;
+      if (body.image && !parent) {
+        if (!/^data:image\/(png|jpe?g|webp);base64,/.test(body.image)) return fail(400, "Unsupported image (use PNG or JPG).");
+        image = body.image;
+      }
+
+      const job = {
+        id: crypto.randomUUID().slice(0, 12),
+        provider: PROVIDER_ID,
+        prompt,
+        options,
+        portrait: provider.portrait(options),
+        fromImage: !!image,
+        editOf: parent?.id || null,
+        status: "processing",
+        createdAt: Date.now(),
+      };
+      const input = { prompt, image, previousInteractionId: parent?.interactionId };
+
+      if (provider.start) {
+        Object.assign(job, await provider.start(job, input)); // errors here go straight back to the user
+        await store.addJob(job);
+      } else {
+        await store.addJob(job);
+        waitUntil(runJob(job, input)); // keeps running after the response is sent (up to maxDuration)
+      }
+      return json(202, publicJob(job));
+    }
+
+    let job = await store.getJob(parts[2]);
+    if (!job) return fail(404, "Video not found");
+
+    if (method === "GET" && parts.length === 3) return json(200, publicJob(await advance(job)));
+
+    if (method === "GET" && parts[3] === "content") {
+      if (!job.videoUrl) return fail(404, "Video file missing");
+      return Response.redirect(url.searchParams.has("download") ? job.downloadUrl : job.videoUrl, 302);
+    }
+
+    if (method === "DELETE" && parts.length === 3) {
+      await store.deleteJob(job);
+      return json(200, { deleted: true });
+    }
+
+    return fail(404, "Not found");
+  } catch (err) {
+    console.error(err);
+    return fail(500, err.message || "Server error");
+  }
+}
+
+export const GET = handle;
+export const POST = handle;
+export const DELETE = handle;
