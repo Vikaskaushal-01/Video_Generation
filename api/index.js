@@ -20,3 +20,15 @@ const json = (status, data) => Response.json(data, { status });
 const fail = (status, message) => json(status, { error: { message } });
 const publicJob = ({ interactionId, taskId, videoUrl, downloadUrl, ...j }) => ({ ...j, canEdit: !!interactionId && j.provider === PROVIDER_ID });
 
+async function finish(job, result) {
+  const { video, ...extra } = result;
+  Object.assign(job, await store.uploadVideo(job.id, video), extra, { status: "completed", finishedAt: Date.now() });
+}
+
+// Runs the whole generation inside this invocation (huggingface, gemini)
+async function runJob(job, input) {
+  try { await finish(job, await provider.generate(job, input)); }
+  catch (err) { console.error(`Job ${job.id} failed:`, err); Object.assign(job, { status: "failed", error: err.message }); }
+  await store.saveJob(job);
+}
+
